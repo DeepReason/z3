@@ -10,7 +10,7 @@
 //               thinking the previous call was not finished. Find a way to stop execution and clean up the global state
 import { Mutex } from 'async-mutex';
 import {
-  Z3Core,
+  Z3_app,
   Z3_ast,
   Z3_ast_kind,
   Z3_ast_map,
@@ -20,10 +20,13 @@ import {
   Z3_decl_kind,
   Z3_error_code,
   Z3_func_decl,
+  Z3_func_entry,
   Z3_func_interp,
   Z3_lbool,
   Z3_model,
   Z3_parameter_kind,
+  Z3_params,
+  Z3_pattern,
   Z3_probe,
   Z3_solver,
   Z3_sort,
@@ -31,10 +34,7 @@ import {
   Z3_symbol,
   Z3_symbol_kind,
   Z3_tactic,
-  Z3_pattern,
-  Z3_app,
-  Z3_params,
-  Z3_func_entry,
+  Z3Core,
 } from '../low-level';
 import {
   AnyAst,
@@ -42,48 +42,56 @@ import {
   AnySort,
   Arith,
   ArithSort,
-  ArrayIndexType,
-  CoercibleToArrayIndexType,
   Ast,
   AstMap,
   AstMapCtor,
   AstVector,
   AstVectorCtor,
   BitVec,
+  BitVecCreation,
   BitVecNum,
   BitVecSort,
+  BodyT,
   Bool,
+  BoolCreation,
   BoolSort,
   CheckSatResult,
-  CoercibleToMap,
-  CoercibleRational,
+  CoercibleFrom,
+  CoercibleTo,
+  CoercibleToArith,
   CoercibleToBitVec,
   CoercibleToExpr,
-  CoercibleFromMap,
+  CoercibleToExprArray,
+  CoercibleToRational,
   Context,
-  ContextCtor,
   Expr,
+  ExprArrayToSortArray,
   FuncDecl,
+  FuncDeclCreation,
   FuncDeclSignature,
+  FuncEntry,
   FuncInterp,
+  IntCreation,
   IntNum,
   Model,
+  NonEmptyExprArray,
   Pattern,
   Probe,
   Quantifier,
-  BodyT,
   RatNum,
+  RealCreation,
+  RecFuncCreation,
   SMTArray,
+  SMTArrayCreation,
   SMTArraySort,
   Solver,
   Sort,
+  SortCreation,
+  SortOf,
   SortToExprMap,
   Tactic,
   Z3Error,
   Z3HighLevel,
-  CoercibleToArith,
-  NonEmptySortArray,
-  FuncEntry,
 } from './types';
 import { allSatisfy, assert, assertExhaustive } from './utils';
 
@@ -91,15 +99,15 @@ const FALLBACK_PRECISION = 17;
 
 const asyncMutex = new Mutex();
 
-function isCoercibleRational(obj: any): obj is CoercibleRational {
+function isCoercibleRational(obj: any): obj is CoercibleToRational {
   // prettier-ignore
   const r = (
     (obj !== null &&
-      (typeof obj === 'object' || typeof obj === 'function')) &&
+      (typeof obj === "object" || typeof obj === "function")) &&
     (obj.numerator !== null &&
-      (typeof obj.numerator === 'number' || typeof obj.numerator === 'bigint')) &&
+      (typeof obj.numerator === "number" || typeof obj.numerator === "bigint")) &&
     (obj.denominator !== null &&
-      (typeof obj.denominator === 'number' || typeof obj.denominator === 'bigint'))
+      (typeof obj.denominator === "number" || typeof obj.denominator === "bigint"))
   );
   r &&
     assert(
@@ -533,7 +541,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
 
     function from(primitive: boolean): Bool<Name>;
     function from(primitive: number): IntNum<Name> | RatNum<Name>;
-    function from(primitive: CoercibleRational): RatNum<Name>;
+    function from(primitive: CoercibleToRational): RatNum<Name>;
     function from(primitive: bigint): IntNum<Name>;
     function from<T extends Expr<Name>>(expr: T): T;
     function from(expr: CoercibleToExpr<Name>): AnyExpr<Name>;
@@ -580,39 +588,39 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
     /////////////
     // Objects //
     /////////////
-    const Sort = {
+    const Sort: SortCreation<Name> = {
       declare: (name: string) => new SortImpl(Z3.mk_uninterpreted_sort(contextPtr, _toSymbol(name))),
     };
-    const Function = {
-      declare: <DomainSort extends Sort<Name>[], RangeSort extends Sort<Name>>(
+    const Function: FuncDeclCreation<Name> = {
+      declare: <Domain extends Expr<Name>[], Range extends Expr<Name>>(
         name: string,
-        ...signature: [...DomainSort, RangeSort]
-      ): FuncDecl<Name, DomainSort, RangeSort> => {
+        ...signature: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+      ): FuncDecl<Name, Domain, Range> => {
         const arity = signature.length - 1;
         const rng = signature[arity];
         _assertContext(rng);
-        const dom = [];
+        const dom: Z3_sort[] = [];
         for (let i = 0; i < arity; i++) {
           _assertContext(signature[i]);
           dom.push(signature[i].ptr);
         }
-        return new FuncDeclImpl<DomainSort, RangeSort>(Z3.mk_func_decl(contextPtr, _toSymbol(name), dom, rng.ptr));
+        return new FuncDeclImpl<Domain, Range>(Z3.mk_func_decl(contextPtr, _toSymbol(name), dom, rng.ptr));
       },
-      fresh: <DomainSort extends Sort<Name>[], RangeSort extends Sort<Name>>(
-        ...signature: [...DomainSort, RangeSort]
-      ): FuncDecl<Name, DomainSort, RangeSort> => {
+      fresh: <Domain extends Expr<Name>[], Range extends Expr<Name>>(
+        ...signature: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+      ): FuncDecl<Name, Domain, Range> => {
         const arity = signature.length - 1;
         const rng = signature[arity];
         _assertContext(rng);
-        const dom = [];
+        const dom: Z3_sort[] = [];
         for (let i = 0; i < arity; i++) {
           _assertContext(signature[i]);
           dom.push(signature[i].ptr);
         }
-        return new FuncDeclImpl<DomainSort, RangeSort>(Z3.mk_fresh_func_decl(contextPtr, 'f', dom, rng.ptr));
+        return new FuncDeclImpl<Domain, Range>(Z3.mk_fresh_func_decl(contextPtr, 'f', dom, rng.ptr));
       },
     };
-    const RecFunc = {
+    const RecFunc: RecFuncCreation<Name> = {
       declare: (name: string, ...signature: FuncDeclSignature<Name>) => {
         const arity = signature.length - 1;
         const rng = signature[arity];
@@ -637,7 +645,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         );
       },
     };
-    const Bool = {
+    const Bool: BoolCreation<Name> = {
       sort: () => new BoolSortImpl(Z3.mk_bool_sort(contextPtr)),
 
       const: (name: string) => new BoolImpl(Z3.mk_const(contextPtr, _toSymbol(name), Bool.sort().ptr)),
@@ -663,7 +671,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         return new BoolImpl(Z3.mk_false(contextPtr));
       },
     };
-    const Int = {
+    const Int: IntCreation<Name> = {
       sort: () => new ArithSortImpl(Z3.mk_int_sort(contextPtr)),
 
       const: (name: string) => new ArithImpl(Z3.mk_const(contextPtr, _toSymbol(name), Int.sort().ptr)),
@@ -687,7 +695,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         return new IntNumImpl(check(Z3.mk_numeral(contextPtr, value.toString(), Int.sort().ptr)));
       },
     };
-    const Real = {
+    const Real: RealCreation<Name> = {
       sort: () => new ArithSortImpl(Z3.mk_real_sort(contextPtr)),
 
       const: (name: string) => new ArithImpl(check(Z3.mk_const(contextPtr, _toSymbol(name), Real.sort().ptr))),
@@ -706,14 +714,14 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       },
       fresh: (prefix = 'b') => new ArithImpl(Z3.mk_fresh_const(contextPtr, prefix, Real.sort().ptr)),
 
-      val: (value: number | bigint | string | CoercibleRational) => {
+      val: (value: number | bigint | string | CoercibleToRational) => {
         if (isCoercibleRational(value)) {
           value = `${value.numerator}/${value.denominator}`;
         }
         return new RatNumImpl(Z3.mk_numeral(contextPtr, value.toString(), Real.sort().ptr));
       },
     };
-    const BitVec = {
+    const BitVec: BitVecCreation<Name> = {
       sort<Bits extends number>(bits: Bits): BitVecSort<Bits, Name> {
         assert(Number.isSafeInteger(bits), 'number of bits must be an integer');
         return new BitVecSortImpl(Z3.mk_bv_sort(contextPtr, bits));
@@ -746,18 +754,18 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         );
       },
     };
-    const Array = {
-      sort<DomainSort extends NonEmptySortArray<Name>, RangeSort extends AnySort<Name>>(
-        ...sig: [...DomainSort, RangeSort]
-      ): SMTArraySort<Name, DomainSort, RangeSort> {
+    const Array: SMTArrayCreation<Name> = {
+      sort<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
+        ...sig: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+      ): SMTArraySort<Name, Domain, Range> {
         const arity = sig.length - 1;
         const r = sig[arity];
         const d = sig[0];
         if (arity === 1) {
-          return new ArraySortImpl(Z3.mk_array_sort(contextPtr, d.ptr, r.ptr));
+          return new ArraySortImpl<Domain, Range>(Z3.mk_array_sort(contextPtr, d.ptr, r.ptr));
         }
         const dom = sig.slice(0, arity);
-        return new ArraySortImpl(
+        return new ArraySortImpl<Domain, Range>(
           Z3.mk_array_sort_n(
             contextPtr,
             dom.map(s => s.ptr),
@@ -765,28 +773,28 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
           ),
         );
       },
-      const<DomainSort extends NonEmptySortArray<Name>, RangeSort extends AnySort<Name>>(
+      const<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
         name: string,
-        ...sig: [...DomainSort, RangeSort]
-      ): SMTArray<Name, DomainSort, RangeSort> {
-        return new ArrayImpl<DomainSort, RangeSort>(
-          check(Z3.mk_const(contextPtr, _toSymbol(name), Array.sort(...sig).ptr)),
+        ...sig: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+      ): SMTArray<Name, Domain, Range> {
+        return new ArrayImpl<Domain, Range>(
+          check(Z3.mk_const(contextPtr, _toSymbol(name), Array.sort<Domain, Range>(...sig).ptr)),
         );
       },
-      consts<DomainSort extends NonEmptySortArray<Name>, RangeSort extends AnySort<Name>>(
+      consts<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
         names: string | string[],
-        ...sig: [...DomainSort, RangeSort]
-      ): SMTArray<Name, DomainSort, RangeSort>[] {
+        ...sig: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+      ): SMTArray<Name, Domain, Range>[] {
         if (typeof names === 'string') {
           names = names.split(' ');
         }
-        return names.map(name => Array.const(name, ...sig));
+        return names.map(name => Array.const<Domain, Range>(name, ...sig));
       },
-      K<DomainSort extends AnySort<Name>, RangeSort extends AnySort<Name>>(
-        domain: DomainSort,
-        value: SortToExprMap<RangeSort, Name>,
-      ): SMTArray<Name, [DomainSort], RangeSort> {
-        return new ArrayImpl<[DomainSort], RangeSort>(check(Z3.mk_const_array(contextPtr, domain.ptr, value.ptr)));
+      K<Domain extends Expr<Name>, Range extends Expr<Name>>(
+        domain: SortOf<Domain, Name>,
+        value: Range,
+      ): SMTArray<Name, [Domain], Range> {
+        return new ArrayImpl<[Domain], Range>(check(Z3.mk_const_array(contextPtr, domain.ptr, value.ptr as Z3_ast)));
       },
     };
 
@@ -798,7 +806,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       condition: Bool<Name> | boolean,
       onTrue: OnTrueRef,
       onFalse: OnFalseRef,
-    ): CoercibleFromMap<OnTrueRef | OnFalseRef, Name>;
+    ): CoercibleFrom<OnTrueRef | OnFalseRef, Name>;
     function If(
       condition: Bool<Name> | Probe<Name> | boolean,
       onTrue: CoercibleToExpr<Name> | Tactic<Name>,
@@ -955,17 +963,17 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       }
     }
 
-    function ForAll<QVarSorts extends NonEmptySortArray<Name>>(
-      quantifiers: ArrayIndexType<Name, QVarSorts>,
+    function ForAll<QVars extends NonEmptyExprArray<Name>>(
+      quantifiers: QVars,
       body: Bool<Name>,
       weight: number = 1,
-    ): NonLambdaQuantifierImpl<QVarSorts> {
+    ): NonLambdaQuantifierImpl<QVars> {
       // Verify all quantifiers are constants
       if (!allSatisfy(quantifiers, isConst)) {
         throw new Error('Quantifier variables must be constants');
       }
 
-      return new NonLambdaQuantifierImpl<QVarSorts>(
+      return new NonLambdaQuantifierImpl<QVars>(
         check(
           Z3.mk_quantifier_const_ex(
             contextPtr,
@@ -982,17 +990,17 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       );
     }
 
-    function Exists<QVarSorts extends NonEmptySortArray<Name>>(
-      quantifiers: ArrayIndexType<Name, QVarSorts>,
+    function Exists<QVars extends NonEmptyExprArray<Name>>(
+      quantifiers: QVars,
       body: Bool<Name>,
       weight: number = 1,
-    ): NonLambdaQuantifierImpl<QVarSorts> {
+    ): NonLambdaQuantifierImpl<QVars> {
       // Verify all quantifiers are constants
       if (!allSatisfy(quantifiers, isConst)) {
         throw new Error('Quantifier variables must be constants');
       }
 
-      return new NonLambdaQuantifierImpl<QVarSorts>(
+      return new NonLambdaQuantifierImpl<QVars>(
         check(
           Z3.mk_quantifier_const_ex(
             contextPtr,
@@ -1009,11 +1017,10 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       );
     }
 
-    function Lambda<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>(
-      quantifiers: ArrayIndexType<Name, DomainSort>,
-      expr: SortToExprMap<RangeSort, Name>,
-    ): LambdaImpl<any, RangeSort> {
-      // TODO: For some reason LambdaImpl<DomainSort, RangeSort> leads to type issues
+    function Lambda<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
+      quantifiers: Domain,
+      expr: Range,
+    ): LambdaImpl<Domain, Range> {
       // and Typescript won't build. I'm not sure why since the types seem to all match
       // up. For now, we just use any for the domain sort until a deeper look can be had
 
@@ -1022,12 +1029,12 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         throw new Error('Quantifier variables must be constants');
       }
 
-      return new LambdaImpl<DomainSort, RangeSort>(
+      return new LambdaImpl<Domain, Range>(
         check(
           Z3.mk_lambda_const(
             contextPtr,
             quantifiers.map(q => q.ptr as unknown as Z3_app),
-            expr.ptr,
+            expr.ptr as Z3_ast,
           ),
         ),
       );
@@ -1040,7 +1047,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       return new ArithImpl(check(Z3.mk_int2real(contextPtr, expr.ast)));
     }
 
-    function ToInt(expr: Arith<Name> | number | CoercibleRational | string): Arith<Name> {
+    function ToInt(expr: Arith<Name> | number | CoercibleToRational | string): Arith<Name> {
       if (!isExpr(expr)) {
         expr = Real.val(expr);
       }
@@ -1049,7 +1056,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       return new ArithImpl(check(Z3.mk_real2int(contextPtr, expr.ast)));
     }
 
-    function IsInt(expr: Arith<Name> | number | CoercibleRational | string): Bool<Name> {
+    function IsInt(expr: Arith<Name> | number | CoercibleToRational | string): Bool<Name> {
       if (!isExpr(expr)) {
         expr = Real.val(expr);
       }
@@ -1058,14 +1065,14 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       return new BoolImpl(check(Z3.mk_is_int(contextPtr, expr.ast)));
     }
 
-    function Sqrt(a: Arith<Name> | number | bigint | string | CoercibleRational): Arith<Name> {
+    function Sqrt(a: Arith<Name> | number | bigint | string | CoercibleToRational): Arith<Name> {
       if (!isExpr(a)) {
         a = Real.val(a);
       }
       return a.pow('1/2');
     }
 
-    function Cbrt(a: Arith<Name> | number | bigint | string | CoercibleRational): Arith<Name> {
+    function Cbrt(a: Arith<Name> | number | bigint | string | CoercibleToRational): Arith<Name> {
       if (!isExpr(a)) {
         a = Real.val(a);
       }
@@ -1149,28 +1156,25 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       return new BitVecImpl<number>(check(Z3.mk_extract(contextPtr, hi, lo, val.ast)));
     }
 
-    function Select<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>(
-      array: SMTArray<Name, DomainSort, RangeSort>,
-      ...indices: CoercibleToArrayIndexType<Name, DomainSort>
-    ): SortToExprMap<RangeSort, Name> {
+    function Select<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
+      array: SMTArray<Name, Domain, Range>,
+      ...indices: CoercibleToExprArray<Domain, Name>
+    ): Range {
       const args = indices.map((arg, i) => array.domain_n(i).cast(arg as any));
       if (args.length === 1) {
-        return _toExpr(check(Z3.mk_select(contextPtr, array.ast, args[0].ast))) as SortToExprMap<RangeSort, Name>;
+        return _toExpr(check(Z3.mk_select(contextPtr, array.ast, args[0].ast))) as Range;
       }
       const _args = args.map(arg => arg.ast);
-      return _toExpr(check(Z3.mk_select_n(contextPtr, array.ast, _args))) as SortToExprMap<RangeSort, Name>;
+      return _toExpr(check(Z3.mk_select_n(contextPtr, array.ast, _args))) as Range;
     }
 
-    function Store<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>(
-      array: SMTArray<Name, DomainSort, RangeSort>,
-      ...indicesAndValue: [
-        ...CoercibleToArrayIndexType<Name, DomainSort>,
-        CoercibleToMap<SortToExprMap<RangeSort, Name>, Name>,
-      ]
-    ): SMTArray<Name, DomainSort, RangeSort> {
+    function Store<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
+      array: SMTArray<Name, Domain, Range>,
+      ...indicesAndValue: [...CoercibleToExprArray<Domain, Name>, CoercibleTo<Range, Name>]
+    ): SMTArray<Name, Domain, Range> {
       const args = indicesAndValue.map((arg, i) => {
         if (i === indicesAndValue.length - 1) {
-          return array.range().cast(arg as any) as SortToExprMap<RangeSort, Name>;
+          return array.range().cast(arg as any) as Range;
         }
         return array.domain_n(i).cast(arg as any);
       });
@@ -1180,15 +1184,15 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       if (args.length === 2) {
         return _toExpr(check(Z3.mk_store(contextPtr, array.ast, args[0].ast, args[1].ast))) as SMTArray<
           Name,
-          DomainSort,
-          RangeSort
+          Domain,
+          Range
         >;
       }
       const _idxs = args.slice(0, args.length - 1).map(arg => arg.ast);
       return _toExpr(check(Z3.mk_store_n(contextPtr, array.ast, _idxs, args[args.length - 1].ast))) as SMTArray<
         Name,
-        DomainSort,
-        RangeSort
+        Domain,
+        Range
       >;
     }
 
@@ -1460,9 +1464,9 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         check(Z3.add_const_interp(contextPtr, this.ptr, decl.ptr, a.ast));
       }
 
-      addFuncInterp<DomainSort extends Sort<Name>[] = Sort<Name>[], RangeSort extends Sort<Name> = Sort<Name>>(
-        decl: FuncDecl<Name, DomainSort, RangeSort>,
-        defaultValue: CoercibleToMap<SortToExprMap<RangeSort, Name>, Name>,
+      addFuncInterp<Domain extends Expr<Name>[] = Expr<Name>[], Range extends Expr<Name> = Expr<Name>>(
+        decl: FuncDecl<Name, Domain, Range>,
+        defaultValue: CoercibleTo<Range, Name>,
       ): FuncInterp<Name> {
         const fi = check(
           Z3.add_func_interp(contextPtr, this.ptr, decl.ptr, decl.range().cast(defaultValue).ptr as Z3_ast),
@@ -1596,7 +1600,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       }
     }
 
-    class FuncDeclImpl<DomainSort extends Sort<Name>[], RangeSort extends Sort<Name>>
+    class FuncDeclImpl<Domain extends Expr<Name>[], Range extends Expr<Name>>
       extends AstImpl<Z3_func_decl>
       implements FuncDecl<Name>
     {
@@ -1614,13 +1618,13 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         return Z3.get_arity(contextPtr, this.ptr);
       }
 
-      domain<T extends number>(i: T): DomainSort[T] {
+      domain<T extends number>(i: T): SortOf<Domain[T], Name> {
         assert(i < this.arity(), 'Index out of bounds');
         return _toSort(Z3.get_domain(contextPtr, this.ptr, i));
       }
 
-      range(): RangeSort {
-        return _toSort(Z3.get_range(contextPtr, this.ptr)) as RangeSort;
+      range(): SortOf<Range, Name> {
+        return _toSort(Z3.get_range(contextPtr, this.ptr));
       }
 
       kind() {
@@ -1661,7 +1665,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         return result;
       }
 
-      call(...args: CoercibleToArrayIndexType<Name, DomainSort>): SortToExprMap<RangeSort, Name> {
+      call(...args: CoercibleToExprArray<Domain, Name>): Range {
         assert(args.length === this.arity(), `Incorrect number of arguments to ${this}`);
         return _toExpr(
           check(
@@ -1673,7 +1677,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
               }),
             ),
           ),
-        ) as SortToExprMap<RangeSort, Name>;
+        ) as Range;
       }
     }
 
@@ -1832,7 +1836,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       declare readonly __typename: ArithSort['__typename'];
 
       cast(other: bigint | number | string): IntNum<Name> | RatNum<Name>;
-      cast(other: CoercibleRational | RatNum<Name>): RatNum<Name>;
+      cast(other: CoercibleToRational | RatNum<Name>): RatNum<Name>;
       cast(other: IntNum<Name>): IntNum<Name>;
       cast(other: Bool<Name> | Arith<Name>): Arith<Name>;
       cast(other: CoercibleToExpr<Name>): never;
@@ -1873,7 +1877,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       arg0: BitVec<Bits, Name>,
       ...args: CoercibleToBitVec<Bits, Name>[]
     ): BitVec<Bits, Name>;
-    function Add<T extends Expr<Name>>(arg0: T, ...args: CoercibleToMap<T, Name>[]): T {
+    function Add<T extends Expr<Name>>(arg0: T, ...args: CoercibleTo<T, Name>[]): T {
       if (arg0 instanceof BitVecImpl) {
         // Assert only 2
         if (args.length !== 1) {
@@ -1895,7 +1899,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       arg0: BitVec<Bits, Name>,
       ...args: CoercibleToBitVec<Bits, Name>[]
     ): BitVec<Bits, Name>;
-    function Sub<T extends Expr<Name>>(arg0: T, ...args: CoercibleToMap<T, Name>[]): T {
+    function Sub<T extends Expr<Name>>(arg0: T, ...args: CoercibleTo<T, Name>[]): T {
       if (arg0 instanceof BitVecImpl) {
         // Assert only 2
         if (args.length !== 1) {
@@ -1917,7 +1921,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       arg0: BitVec<Bits, Name>,
       ...args: CoercibleToBitVec<Bits, Name>[]
     ): BitVec<Bits, Name>;
-    function Mul<T extends Expr<Name>>(arg0: T, ...args: CoercibleToMap<T, Name>[]): T {
+    function Mul<T extends Expr<Name>>(arg0: T, ...args: CoercibleTo<T, Name>[]): T {
       if (arg0 instanceof BitVecImpl) {
         // Assert only 2
         if (args.length !== 1) {
@@ -1939,7 +1943,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       arg0: BitVec<Bits, Name>,
       arg1: CoercibleToBitVec<Bits, Name>,
     ): BitVec<Bits, Name>;
-    function Div<T extends Expr<Name>>(arg0: T, arg1: CoercibleToMap<T, Name>): T {
+    function Div<T extends Expr<Name>>(arg0: T, arg1: CoercibleTo<T, Name>): T {
       if (arg0 instanceof BitVecImpl) {
         return new BitVecImpl<number>(
           check(Z3.mk_bvsdiv(contextPtr, arg0.ast, arg0.sort.cast(arg1).ast)),
@@ -1972,7 +1976,7 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
 
     function Mod(a: Arith<Name>, b: CoercibleToArith<Name>): Arith<Name>;
     function Mod<Bits extends number>(a: BitVec<Bits, Name>, b: CoercibleToBitVec<Bits, Name>): BitVec<Bits, Name>;
-    function Mod<T extends Expr<Name>>(a: T, b: CoercibleToMap<T, Name>): T {
+    function Mod<T extends Expr<Name>>(a: T, b: CoercibleTo<T, Name>): T {
       if (a instanceof BitVecImpl) {
         return new BitVecImpl<number>(check(Z3.mk_bvsrem(contextPtr, a.ast, a.sort.cast(b).ast))) as unknown as T;
       } else {
@@ -2302,63 +2306,60 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
       }
     }
 
-    class ArraySortImpl<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>
+    class ArraySortImpl<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>
       extends SortImpl
-      implements SMTArraySort<Name, DomainSort, RangeSort>
+      implements SMTArraySort<Name, Domain, Range>
     {
       declare readonly __typename: SMTArraySort['__typename'];
 
-      domain(): DomainSort[0] {
+      domain(): SortOf<Domain[0], Name> {
         return _toSort(check(Z3.get_array_sort_domain(contextPtr, this.ptr)));
       }
 
-      domain_n<T extends number>(i: T): DomainSort[T] {
-        return _toSort(check(Z3.get_array_sort_domain_n(contextPtr, this.ptr, i)));
+      domain_n<T extends number>(i: T): SortOf<Domain[T], Name> {
+        return _toSort(check(Z3.get_array_sort_domain_n(contextPtr, this.ptr, i))) as any;
       }
 
-      range(): RangeSort {
-        return _toSort(check(Z3.get_array_sort_range(contextPtr, this.ptr))) as RangeSort;
+      range(): SortOf<Range, Name> {
+        return _toSort(check(Z3.get_array_sort_range(contextPtr, this.ptr)));
       }
     }
 
-    class ArrayImpl<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>
-      extends ExprImpl<Z3_ast, ArraySortImpl<DomainSort, RangeSort>>
-      implements SMTArray<Name, DomainSort, RangeSort>
+    class ArrayImpl<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>
+      extends ExprImpl<Z3_ast, ArraySortImpl<Domain, Range>>
+      implements SMTArray<Name, Domain, Range>
     {
       declare readonly __typename: 'Array' | 'Lambda';
 
-      domain(): DomainSort[0] {
+      domain(): SortOf<Domain[0], Name> {
         return this.sort.domain();
       }
 
-      domain_n<T extends number>(i: T): DomainSort[T] {
+      domain_n<T extends number>(i: T): SortOf<Domain[T], Name> {
         return this.sort.domain_n(i);
       }
 
-      range(): RangeSort {
+      range(): SortOf<Range, Name> {
         return this.sort.range();
       }
 
-      select(...indices: CoercibleToArrayIndexType<Name, DomainSort>): SortToExprMap<RangeSort, Name> {
-        return Select<DomainSort, RangeSort>(this, ...indices) as SortToExprMap<RangeSort, Name>;
+      select(...indices: CoercibleToExprArray<Domain, Name>): Range {
+        return Select<Domain, Range>(this, ...indices) as Range;
       }
 
       store(
-        ...indicesAndValue: [
-          ...CoercibleToArrayIndexType<Name, DomainSort>,
-          CoercibleToMap<SortToExprMap<RangeSort, Name>, Name>,
-        ]
-      ): SMTArray<Name, DomainSort, RangeSort> {
+        ...indicesAndValue: [...CoercibleToExprArray<Domain, Name>, CoercibleTo<Range, Name>]
+      ): SMTArray<Name, Domain, Range> {
         return Store(this, ...indicesAndValue);
       }
     }
 
     class QuantifierImpl<
-        QVarSorts extends NonEmptySortArray<Name>,
-        QSort extends BoolSort<Name> | SMTArraySort<Name, QVarSorts>,
+        QVars extends NonEmptyExprArray<Name>,
+        QSort extends BoolSort<Name> | SMTArraySort<Name, QVars>,
       >
       extends ExprImpl<Z3_ast, QSort>
-      implements Quantifier<Name, QVarSorts, QSort>
+      implements Quantifier<Name, QVars, QSort>
     {
       declare readonly __typename: Quantifier['__typename'];
 
@@ -2394,8 +2395,8 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         return _toExpr(check(Z3.get_quantifier_no_pattern_ast(contextPtr, this.ast, i)));
       }
 
-      body(): BodyT<Name, QVarSorts, QSort> {
-        return _toExpr(check(Z3.get_quantifier_body(contextPtr, this.ast))) as any;
+      body(): BodyT<Name, QVars, QSort> {
+        return _toExpr(check(Z3.get_quantifier_body(contextPtr, this.ast)));
       }
 
       num_vars(): number {
@@ -2406,18 +2407,18 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
         return _fromSymbol(Z3.get_quantifier_bound_name(contextPtr, this.ast, i));
       }
 
-      var_sort<T extends number>(i: T): QVarSorts[T] {
+      var_sort<T extends number>(i: T): SortOf<QVars[T], Name> {
         return _toSort(check(Z3.get_quantifier_bound_sort(contextPtr, this.ast, i)));
       }
 
-      children(): [BodyT<Name, QVarSorts, QSort>] {
+      children(): [BodyT<Name, QVars, QSort>] {
         return [this.body()];
       }
     }
 
-    class NonLambdaQuantifierImpl<QVarSorts extends NonEmptySortArray<Name>>
-      extends QuantifierImpl<QVarSorts, BoolSort<Name>>
-      implements Quantifier<Name, QVarSorts, BoolSort<Name>>, Bool<Name>
+    class NonLambdaQuantifierImpl<QVars extends NonEmptyExprArray<Name>>
+      extends QuantifierImpl<QVars, BoolSort<Name>>
+      implements Quantifier<Name, QVars, BoolSort<Name>>, Bool<Name>
     {
       declare readonly __typename: 'NonLambdaQuantifier';
 
@@ -2447,36 +2448,31 @@ export function createApi(Z3: Z3Core): Z3HighLevel {
     }
 
     // isBool will return false which is unlike the python API (but like the C API)
-    class LambdaImpl<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>
-      extends QuantifierImpl<DomainSort, SMTArraySort<Name, DomainSort, RangeSort>>
-      implements
-        SMTArray<Name, DomainSort, RangeSort>,
-        Quantifier<Name, DomainSort, SMTArraySort<Name, DomainSort, RangeSort>>
+    class LambdaImpl<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>
+      extends QuantifierImpl<Domain, SMTArraySort<Name, Domain, Range>>
+      implements SMTArray<Name, Domain, Range>, Quantifier<Name, Domain, SMTArraySort<Name, Domain, Range>>
     {
       declare readonly __typename: 'Lambda';
 
-      domain(): DomainSort[0] {
+      domain(): SortOf<Domain[0], Name> {
         return this.sort.domain();
       }
 
-      domain_n<T extends number>(i: T): DomainSort[T] {
+      domain_n<T extends number>(i: T): SortOf<Domain[T], Name> {
         return this.sort.domain_n(i);
       }
 
-      range(): RangeSort {
+      range(): SortOf<Range, Name> {
         return this.sort.range();
       }
 
-      select(...indices: CoercibleToArrayIndexType<Name, DomainSort>): SortToExprMap<RangeSort, Name> {
-        return Select<DomainSort, RangeSort>(this, ...indices);
+      select(...indices: CoercibleToExprArray<Domain, Name>): Range {
+        return Select<Domain, Range>(this, ...indices);
       }
 
       store(
-        ...indicesAndValue: [
-          ...CoercibleToArrayIndexType<Name, DomainSort>,
-          CoercibleToMap<SortToExprMap<RangeSort, Name>, Name>,
-        ]
-      ): SMTArray<Name, DomainSort, RangeSort> {
+        ...indicesAndValue: [...CoercibleToExprArray<Domain, Name>, CoercibleTo<Range, Name>]
+      ): SMTArray<Name, Domain, Range> {
         return Store(this, ...indicesAndValue);
       }
     }

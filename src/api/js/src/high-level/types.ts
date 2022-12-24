@@ -22,6 +22,7 @@ export type AnySort<Name extends string = 'main'> =
   | ArithSort<Name>
   | BitVecSort<number, Name>
   | SMTArraySort<Name>;
+
 /** @hidden */
 export type AnyExpr<Name extends string = 'main'> =
   | Expr<Name>
@@ -32,6 +33,7 @@ export type AnyExpr<Name extends string = 'main'> =
   | BitVec<number, Name>
   | BitVecNum<number, Name>
   | SMTArray<Name>;
+
 /** @hidden */
 export type AnyAst<Name extends string = 'main'> = AnyExpr<Name> | AnySort<Name> | FuncDecl<Name>;
 
@@ -42,21 +44,22 @@ export type SortToExprMap<S extends AnySort<Name>, Name extends string = 'main'>
   ? Arith<Name>
   : S extends BitVecSort<infer Size, Name>
   ? BitVec<Size, Name>
-  : S extends SMTArraySort<Name, infer DomainSort, infer RangeSort>
-  ? SMTArray<Name, DomainSort, RangeSort>
+  : S extends SMTArraySort<Name, infer Domain, infer Range>
+  ? SMTArray<Name, Domain, Range>
   : S extends Sort<Name>
   ? Expr<Name, S, Z3_ast>
   : never;
 
-/** @hidden */
-export type CoercibleFromMap<S extends CoercibleToExpr<Name>, Name extends string = 'main'> = S extends bigint
-  ? Arith<Name>
-  : S extends number | CoercibleRational
-  ? RatNum<Name>
-  : S extends boolean
-  ? Bool<Name>
-  : S extends Expr<Name>
-  ? S
+export type SortOf<E extends AnyExpr<Name>, Name extends string = 'main'> = E extends Bool<Name>
+  ? BoolSort<Name>
+  : E extends Arith<Name>
+  ? ArithSort<Name>
+  : E extends BitVec<infer B, Name>
+  ? BitVecSort<B, Name>
+  : E extends SMTArray<Name, infer Domain, infer Range>
+  ? SMTArraySort<Name, Domain, Range>
+  : E extends Expr<Name>
+  ? Sort<Name>
   : never;
 
 /** @hidden */
@@ -65,30 +68,69 @@ export type CoercibleToBitVec<Bits extends number = number, Name extends string 
   | number
   | BitVec<Bits, Name>;
 
-export type CoercibleRational = { numerator: bigint | number; denominator: bigint | number };
+export type CoercibleToRational = { numerator: bigint | number; denominator: bigint | number };
 
 /** @hidden */
-export type CoercibleToExpr<Name extends string = 'main'> = number | bigint | boolean | CoercibleRational | Expr<Name>;
+export type CoercibleToExpr<Name extends string = 'main'> =
+  | number
+  | bigint
+  | boolean
+  | CoercibleToRational
+  | Expr<Name>;
 
 /** @hidden */
-export type CoercibleToArith<Name extends string = 'main'> = number | string | bigint | CoercibleRational | Arith<Name>;
+export type CoercibleToArith<Name extends string = 'main'> =
+  | number
+  | string
+  | bigint
+  | CoercibleToRational
+  | Arith<Name>;
 
 /** @hidden */
-export type CoercibleToMap<T extends AnyExpr<Name>, Name extends string = 'main'> = T extends Bool<Name>
+export type CoercibleTo<T extends AnyExpr<Name>, Name extends string = 'main'> = T extends Bool<Name>
   ? boolean | Bool<Name>
   : T extends IntNum<Name>
   ? bigint | number | IntNum<Name>
   : T extends RatNum<Name>
-  ? bigint | number | CoercibleRational | RatNum<Name>
+  ? bigint | number | CoercibleToRational | RatNum<Name>
   : T extends Arith<Name>
   ? CoercibleToArith<Name>
   : T extends BitVec<infer Size, Name>
   ? CoercibleToBitVec<Size, Name>
-  : T extends SMTArray<Name, infer DomainSort, infer RangeSort>
-  ? SMTArray<Name, DomainSort, RangeSort>
+  : T extends SMTArray<Name, infer Domain, infer Range>
+  ? SMTArray<Name, Domain, Range>
   : T extends Expr<Name>
   ? Expr<Name>
   : never;
+
+/** @hidden */
+export type CoercibleFrom<S extends CoercibleToExpr<Name>, Name extends string = 'main'> = S extends bigint
+  ? Arith<Name>
+  : S extends number | CoercibleToRational
+  ? RatNum<Name>
+  : S extends boolean
+  ? Bool<Name>
+  : S extends Expr<Name>
+  ? S
+  : never;
+
+export type NonEmptyExprArray<Name extends string = 'main'> = [Expr<Name>, ...Array<Expr<Name>>];
+
+export type ExprArrayToSortArray<Arr extends Expr<Name>[], Name extends string> = [
+  ...{
+    [Key in keyof Arr]: Key extends number ? (Arr[Key] extends Expr<Name, infer S> ? S : never) : Arr[Key];
+  },
+];
+
+export type CoercibleToExprArray<Domain extends Expr<Name>[], Name extends string> = [
+  ...{
+    [Key in keyof Domain]: Key extends number
+      ? Domain[Key] extends Expr<Name>
+        ? CoercibleTo<Domain[Key], Name>
+        : never
+      : Domain[Key];
+  },
+];
 
 /**
  * Used to create a Real constant
@@ -274,7 +316,7 @@ export interface Context<Name extends string = 'main'> {
   /**
    * Coerce a rational into a Real expression
    * @category Functions */
-  from(primitive: CoercibleRational): RatNum<Name>;
+  from(primitive: CoercibleToRational): RatNum<Name>;
 
   /**
    * Coerce a big number into a Integer expression
@@ -297,10 +339,10 @@ export interface Context<Name extends string = 'main'> {
    * const y = Int.const('y');
    * const result = await solve(x.le(y));
    * if (isModel(result)) {
-   *   console.log('Z3 found a solution');
+   *   console.log("Z3 found a solution");
    *   console.log(`x=${result.get(x)}, y=${result.get(y)}`);
    * } else {
-   *   console.error('No solution found');
+   *   console.error("No solution found");
    * }
    * ```
    *
@@ -378,7 +420,7 @@ export interface Context<Name extends string = 'main'> {
     condition: Bool<Name> | boolean,
     onTrue: OnTrueRef,
     onFalse: OnFalseRef,
-  ): CoercibleFromMap<OnTrueRef | OnFalseRef, Name>;
+  ): CoercibleFrom<OnTrueRef | OnFalseRef, Name>;
 
   /** @category Operations */
   Distinct(...args: CoercibleToExpr<Name>[]): Bool<Name>;
@@ -428,31 +470,31 @@ export interface Context<Name extends string = 'main'> {
   // Quantifiers
 
   /** @category Operations */
-  ForAll<QVarSorts extends NonEmptySortArray<Name>>(
-    quantifiers: ArrayIndexType<Name, QVarSorts>,
+  ForAll<QVars extends NonEmptyExprArray<Name>>(
+    quantifiers: QVars,
     body: Bool<Name>,
     weight?: number,
-  ): Quantifier<Name, QVarSorts, BoolSort<Name>> & Bool<Name>;
+  ): Quantifier<Name, QVars, BoolSort<Name>> & Bool<Name>;
 
   /** @category Operations */
-  Exists<QVarSorts extends NonEmptySortArray<Name>>(
-    quantifiers: ArrayIndexType<Name, QVarSorts>,
+  Exists<QVars extends NonEmptyExprArray<Name>>(
+    quantifiers: QVars,
     body: Bool<Name>,
     weight?: number,
-  ): Quantifier<Name, QVarSorts, BoolSort<Name>> & Bool<Name>;
+  ): Quantifier<Name, QVars, BoolSort<Name>> & Bool<Name>;
 
   /** @category Operations */
-  Lambda<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>(
-    quantifiers: ArrayIndexType<Name, DomainSort>,
-    expr: SortToExprMap<RangeSort, Name>,
-  ): Quantifier<Name, DomainSort, SMTArraySort<Name, DomainSort, RangeSort>> & SMTArray<Name, DomainSort, RangeSort>;
+  Lambda<QVars extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
+    quantifiers: QVars,
+    expr: Range,
+  ): Quantifier<Name, QVars, SMTArraySort<Name, QVars, Range>> & SMTArray<Name, QVars, Range>;
 
   // Arithmetic
   /** @category Operations */
   ToReal(expr: Arith<Name> | bigint): Arith<Name>;
 
   /** @category Operations */
-  ToInt(expr: Arith<Name> | number | CoercibleRational | string): Arith<Name>;
+  ToInt(expr: Arith<Name> | number | CoercibleToRational | string): Arith<Name>;
 
   /**
    * Create an IsInt Z3 predicate
@@ -465,7 +507,7 @@ export interface Context<Name extends string = 'main'> {
    * // unsat
    * ```
    * @category Operations */
-  IsInt(expr: Arith<Name> | number | CoercibleRational | string): Bool<Name>;
+  IsInt(expr: Arith<Name> | number | CoercibleToRational | string): Bool<Name>;
 
   /**
    * Returns a Z3 expression representing square root of a
@@ -574,19 +616,16 @@ export interface Context<Name extends string = 'main'> {
   // Arrays
 
   /** @category Operations */
-  Select<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name> = Sort<Name>>(
-    array: SMTArray<Name, DomainSort, RangeSort>,
-    ...indices: CoercibleToArrayIndexType<Name, DomainSort>
-  ): SortToExprMap<RangeSort, Name>;
+  Select<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name> = Expr<Name>>(
+    array: SMTArray<Name, Domain, Range>,
+    ...indices: CoercibleToExprArray<Domain, Name>
+  ): Range;
 
   /** @category Operations */
-  Store<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name> = Sort<Name>>(
-    array: SMTArray<Name, DomainSort, RangeSort>,
-    ...indicesAndValue: [
-      ...CoercibleToArrayIndexType<Name, DomainSort>,
-      CoercibleToMap<SortToExprMap<RangeSort, Name>, Name>,
-    ]
-  ): SMTArray<Name, DomainSort, RangeSort>;
+  Store<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name> = Expr<Name>>(
+    array: SMTArray<Name, Domain, Range>,
+    ...indicesAndValue: [...CoercibleToExprArray<Domain, Name>, CoercibleTo<Range, Name>]
+  ): SMTArray<Name, Domain, Range>;
 
   /** @category Operations */
   Extract<Bits extends number>(hi: number, lo: number, val: BitVec<Bits, Name>): BitVec<number, Name>;
@@ -705,9 +744,9 @@ export interface Model<Name extends string = 'main'> extends Iterable<FuncDecl<N
 
   updateValue(decl: FuncDecl<Name> | Expr<Name>, a: Ast<Name> | FuncInterp<Name>): void;
 
-  addFuncInterp<DomainSort extends Sort<Name>[] = Sort<Name>[], RangeSort extends Sort<Name> = Sort<Name>>(
-    decl: FuncDecl<Name, DomainSort, RangeSort>,
-    defaultValue: CoercibleToMap<SortToExprMap<RangeSort, Name>, Name>,
+  addFuncInterp<Domain extends Expr<Name>[] = Expr<Name>[], Range extends Expr<Name> = Expr<Name>>(
+    decl: FuncDecl<Name, Domain, Range>,
+    defaultValue: CoercibleTo<Range, Name>,
   ): FuncInterp<Name>;
 }
 
@@ -790,7 +829,7 @@ export interface FuncInterp<Name extends string = 'main'> {
 }
 
 /** @hidden */
-export type FuncDeclSignature<Name extends string> = [Sort<Name>, Sort<Name>, ...Sort<Name>[]];
+export type FuncDeclSignature<Name extends string> = [Sort<Name>, ...Sort<Name>[]];
 
 /**
  * Part of {@link Context}. Used to declare functions
@@ -809,14 +848,14 @@ export interface FuncDeclCreation<Name extends string> {
    * @param name Name of the function
    * @param signature The domains, and last parameter - the range of the function
    */
-  declare<DomainSort extends Sort<Name>[], RangeSort extends Sort<Name>>(
+  declare<Domain extends Expr<Name>[], Range extends Expr<Name>>(
     name: string,
-    ...signature: [...DomainSort, RangeSort]
-  ): FuncDecl<Name, DomainSort, RangeSort>;
+    ...signature: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+  ): FuncDecl<Name, Domain, Range>;
 
-  fresh<DomainSort extends Sort<Name>[], RangeSort extends Sort<Name>>(
-    ...signature: [...DomainSort, RangeSort]
-  ): FuncDecl<Name, DomainSort, RangeSort>;
+  fresh<Domain extends Expr<Name>[], Range extends Expr<Name>>(
+    ...signature: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+  ): FuncDecl<Name, Domain, Range>;
 }
 
 /**
@@ -833,8 +872,8 @@ export interface RecFuncCreation<Name extends string> {
  */
 export interface FuncDecl<
   Name extends string = 'main',
-  DomainSort extends Sort<Name>[] = Sort<Name>[],
-  RangeSort extends Sort<Name> = Sort<Name>,
+  Domain extends Expr<Name>[] = Expr<Name>[],
+  Range extends Expr<Name> = Expr<Name>,
 > extends Ast<Name, Z3_func_decl> {
   /** @hidden */
   readonly __typename: 'FuncDecl';
@@ -843,15 +882,15 @@ export interface FuncDecl<
 
   arity(): number;
 
-  domain<T extends number>(i: T): DomainSort[T];
+  domain<T extends number>(i: T): SortOf<Domain[T], Name>;
 
-  range(): RangeSort;
+  range(): SortOf<Range, Name>;
 
   kind(): Z3_decl_kind;
 
   params(): (number | string | Sort<Name> | Expr<Name> | FuncDecl<Name>)[];
 
-  call(...args: CoercibleToArrayIndexType<Name, DomainSort>): SortToExprMap<RangeSort, Name>;
+  call(...args: CoercibleToExprArray<Domain, Name>): Range;
 }
 
 export interface Expr<Name extends string = 'main', S extends Sort<Name> = AnySort<Name>, Ptr = unknown>
@@ -941,11 +980,11 @@ export interface ArithSort<Name extends string = 'main'> extends Sort<Name> {
 
   cast(other: bigint | number | string): IntNum<Name> | RatNum<Name>;
 
-  cast(other: CoercibleRational | RatNum<Name>): RatNum<Name>;
+  cast(other: CoercibleToRational | RatNum<Name>): RatNum<Name>;
 
   cast(other: IntNum<Name>): IntNum<Name>;
 
-  cast(other: bigint | number | string | Bool<Name> | Arith<Name> | CoercibleRational): Arith<Name>;
+  cast(other: bigint | number | string | Bool<Name> | Arith<Name> | CoercibleToRational): Arith<Name>;
 
   cast(other: CoercibleToExpr<Name> | string): never;
 }
@@ -977,7 +1016,7 @@ export interface RealCreation<Name extends string> {
 
   fresh(prefix?: string): Arith<Name>;
 
-  val(value: number | string | bigint | CoercibleRational): RatNum<Name>;
+  val(value: number | string | bigint | CoercibleToRational): RatNum<Name>;
 }
 
 /**
@@ -1396,14 +1435,14 @@ export interface BitVecNum<Bits extends number = number, Name extends string = '
  * A Sort representing a SMT Array with range of sort {@link SMTArraySort.range range}
  * and a domain of sort {@link SMTArraySort.domain domain}
  *
- * @typeParam DomainSort The sort of the domain of the array (provided as an array of sorts)
- * @typeParam RangeSort The sort of the array range
+ * @typeParam Domain The sort of the domain of the array (provided as an array of sorts)
+ * @typeParam Range The sort of the array range
  * @category Arrays
  */
 export interface SMTArraySort<
   Name extends string = 'main',
-  DomainSort extends NonEmptySortArray<Name> = [Sort<Name>, ...Sort<Name>[]],
-  RangeSort extends AnySort<Name> = AnySort<Name>,
+  Domain extends NonEmptyExprArray<Name> = NonEmptyExprArray<Name>,
+  Range extends Expr<Name> = Expr<Name>,
 > extends Sort<Name> {
   /** @hidden */
   readonly __typename: 'ArraySort';
@@ -1411,95 +1450,74 @@ export interface SMTArraySort<
   /**
    * The sort of the first dimension of the domain
    */
-  domain(): DomainSort[0];
+  domain(): SortOf<Domain[0], Name>;
 
   /**
    * The sort of the i-th (0-indexed) dimension of the domain
    *
    * @param i index of the dimension of the domain being requested
    */
-  domain_n<T extends number>(i: T): DomainSort[T];
+  domain_n<T extends number>(i: T): SortOf<Domain[T], Name>;
 
   /**
    * The sort of the range
    */
-  range(): RangeSort;
+  range(): SortOf<Range, Name>;
 }
 
 /** @category Arrays */
 export interface SMTArrayCreation<Name extends string> {
-  sort<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>(
-    ...sig: [...DomainSort, RangeSort]
-  ): SMTArraySort<Name, DomainSort, RangeSort>;
+  sort<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
+    ...sig: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+  ): SMTArraySort<Name, Domain, Range>;
 
-  const<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>(
+  const<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
     name: string,
-    ...sig: [...DomainSort, RangeSort]
-  ): SMTArray<Name, DomainSort, RangeSort>;
+    ...sig: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+  ): SMTArray<Name, Domain, Range>;
 
-  consts<DomainSort extends NonEmptySortArray<Name>, RangeSort extends Sort<Name>>(
+  consts<Domain extends NonEmptyExprArray<Name>, Range extends Expr<Name>>(
     names: string | string[],
-    ...sig: [...DomainSort, RangeSort]
-  ): SMTArray<Name, DomainSort, RangeSort>[];
+    ...sig: [...ExprArrayToSortArray<Domain, Name>, SortOf<Range, Name>]
+  ): SMTArray<Name, Domain, Range>[];
 
-  K<DomainSort extends AnySort<Name>, RangeSort extends AnySort<Name>>(
-    domain: DomainSort,
-    value: SortToExprMap<RangeSort, Name>,
-  ): SMTArray<Name, [DomainSort], RangeSort>;
+  K<Domain extends Expr<Name>, Range extends Expr<Name>>(
+    domain: SortOf<Domain, Name>,
+    value: Range,
+  ): SMTArray<Name, [Domain], Range>;
 }
-
-export type NonEmptySortArray<Name extends string = 'main'> = [Sort<Name>, ...Array<Sort<Name>>];
-
-export type ArrayIndexType<Name extends string, DomainSort extends Sort<Name>[]> = [
-  ...{
-    [Key in keyof DomainSort]: DomainSort[Key] extends AnySort<Name>
-      ? SortToExprMap<DomainSort[Key], Name>
-      : DomainSort[Key];
-  },
-];
-
-export type CoercibleToArrayIndexType<Name extends string, DomainSort extends Sort<Name>[]> = [
-  ...{
-    [Key in keyof DomainSort]: DomainSort[Key] extends AnySort<Name>
-      ? CoercibleToMap<SortToExprMap<DomainSort[Key], Name>, Name>
-      : DomainSort[Key];
-  },
-];
 
 /**
  * Represents Array expression
  *
- * @typeParam DomainSort The sort of the domain of the array (provided as an array of sorts)
- * @typeParam RangeSort The sort of the array range
+ * @typeParam Domain The sort of the domain of the array (provided as an array of sorts)
+ * @typeParam Range The sort of the array range
  * @category Arrays
  */
 export interface SMTArray<
   Name extends string = 'main',
-  DomainSort extends NonEmptySortArray<Name> = [Sort<Name>, ...Sort<Name>[]],
-  RangeSort extends Sort<Name> = Sort<Name>,
-> extends Expr<Name, SMTArraySort<Name, DomainSort, RangeSort>, Z3_ast> {
+  Domain extends NonEmptyExprArray<Name> = NonEmptyExprArray<Name>,
+  Range extends Expr<Name> = Expr<Name>,
+> extends Expr<Name, SMTArraySort<Name, Domain, Range>, Z3_ast> {
   /** @hidden */
   readonly __typename: 'Array' | 'Lambda';
 
-  domain(): DomainSort[0];
+  domain(): SortOf<Domain[0], Name>;
 
-  domain_n<T extends number>(i: T): DomainSort[T];
+  domain_n<T extends number>(i: T): SortOf<Domain[T], Name>;
 
-  range(): RangeSort;
+  range(): SortOf<Range, Name>;
 
-  select(...indices: CoercibleToArrayIndexType<Name, DomainSort>): SortToExprMap<RangeSort, Name>;
+  select(...indices: CoercibleToExprArray<Domain, Name>): Range;
 
   /**
-   * value should be coercible to RangeSort
+   * value should be coercible to Range
    *
    * @param indicesAndValue (idx0, idx1, ..., idxN, value)
    */
   store(
-    ...indicesAndValue: [
-      ...CoercibleToArrayIndexType<Name, DomainSort>,
-      CoercibleToMap<SortToExprMap<RangeSort, Name>, Name>,
-    ]
-  ): SMTArray<Name, DomainSort, RangeSort>;
+    ...indicesAndValue: [...CoercibleToExprArray<Domain, Name>, CoercibleTo<Range, Name>]
+  ): SMTArray<Name, Domain, Range>;
 }
 
 /**
@@ -1509,19 +1527,15 @@ export interface SMTArray<
  */
 export type BodyT<
   Name extends string = 'main',
-  QVarSorts extends NonEmptySortArray<Name> = [Sort<Name>, ...Sort<Name>[]],
-  QSort extends BoolSort<Name> | SMTArraySort<Name, QVarSorts> = BoolSort<Name> | SMTArraySort<Name, QVarSorts>,
-> = QSort extends BoolSort<Name>
-  ? Bool<Name>
-  : QSort extends SMTArray<Name, QVarSorts, infer RangeSort>
-  ? SortToExprMap<RangeSort, Name>
-  : never;
+  QVars extends NonEmptyExprArray<Name> = NonEmptyExprArray<Name>,
+  QSort extends BoolSort<Name> | SMTArraySort<Name, QVars> = BoolSort<Name> | SMTArraySort<Name, QVars>,
+> = QSort extends BoolSort<Name> ? Bool<Name> : QSort extends SMTArray<Name, QVars, infer Range> ? Range : never;
 
 /** @category Quantifiers */
 export interface Quantifier<
   Name extends string = 'main',
-  QVarSorts extends NonEmptySortArray<Name> = [Sort<Name>, ...Sort<Name>[]],
-  QSort extends BoolSort<Name> | SMTArraySort<Name, QVarSorts> = BoolSort<Name> | SMTArraySort<Name, QVarSorts>,
+  QVars extends NonEmptyExprArray<Name> = NonEmptyExprArray<Name>,
+  QSort extends BoolSort<Name> | SMTArraySort<Name, QVars> = BoolSort<Name> | SMTArraySort<Name, QVars>,
 > extends Expr<Name, QSort> {
   readonly __typename: 'NonLambdaQuantifier' | 'Lambda';
 
@@ -1541,15 +1555,15 @@ export interface Quantifier<
 
   no_pattern(i: number): Expr<Name>;
 
-  body(): BodyT<Name, QVarSorts, QSort>;
+  body(): BodyT<Name, QVars, QSort>;
 
   num_vars(): number;
 
   var_name(i: number): string | number;
 
-  var_sort<T extends number>(i: T): QVarSorts[T];
+  var_sort<T extends number>(i: T): SortOf<QVars[T], Name>;
 
-  children(): [BodyT<Name, QVarSorts, QSort>];
+  children(): [BodyT<Name, QVars, QSort>];
 }
 
 export interface Probe<Name extends string = 'main'> {
