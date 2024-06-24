@@ -1,8 +1,9 @@
 import assert from 'assert';
 import asyncToArray from 'iter-tools/methods/async-to-array';
-import { init, killThreads } from '../jest';
+import { CoercibleToArrayIndexType, init, killThreads, NonEmptySortArray, SortToExprMap } from '../jest';
 import { Arith, Bool, Model, Z3AssertionError, Z3HighLevel } from './types';
-import { expectType } from "ts-expect";
+import { expectType } from 'ts-expect';
+import { SMTArraySort, BitVecSort, SMTArray, Sort } from 'z3-solver';
 
 /**
  * Generate all possible solutions from given assumptions.
@@ -58,6 +59,7 @@ async function* allSolutions<Name extends string>(...assertions: Bool<Name>[]): 
 
 async function prove(conjecture: Bool): Promise<void> {
   const solver = new conjecture.ctx.Solver();
+  solver.set('timeout', 1000);
   const { Not } = solver.ctx;
   solver.add(Not(conjecture));
   expect(await solver.check()).toStrictEqual('unsat');
@@ -113,11 +115,11 @@ describe('high-level', () => {
   it('test loading a solver state from a string', async () => {
     const { Solver, Not, Int } = api.Context('main');
     const solver = new Solver();
-    solver.fromString("(declare-const x Int) (assert (and (< x 2) (> x 0)))")
-    expect(await solver.check()).toStrictEqual('sat')
-    const x = Int.const('x')
-    solver.add(Not(x.eq(1)))
-    expect(await solver.check()).toStrictEqual('unsat')
+    solver.fromString('(declare-const x Int) (assert (and (< x 2) (> x 0)))');
+    expect(await solver.check()).toStrictEqual('sat');
+    const x = Int.const('x');
+    solver.add(Not(x.eq(1)));
+    expect(await solver.check()).toStrictEqual('unsat');
   });
 
   it('disproves x = y implies g(g(x)) = g(y)', async () => {
@@ -393,14 +395,13 @@ describe('high-level', () => {
   });
 
   describe('arrays', () => {
-
     it('Example 1', async () => {
       const Z3 = api.Context('main');
 
       const arr = Z3.Array.const('arr', Z3.Int.sort(), Z3.Int.sort());
       const [idx, val] = Z3.Int.consts('idx val');
 
-      const conjecture = (arr.store(idx, val).select(idx).eq(val));
+      const conjecture = arr.store(idx, val).select(idx).eq(val);
       await prove(conjecture);
     });
 
@@ -428,7 +429,7 @@ describe('high-level', () => {
       // and is detected at compile time
       // @ts-expect-error
       const arr3 = Array.const('arr3', BitVec.sort(1));
-    })
+    });
 
     it('can do simple proofs', async () => {
       const { BitVec, Array, isArray, isArraySort, isConstArray, Eq, Not } = api.Context('main');
@@ -447,13 +448,6 @@ describe('high-level', () => {
       await prove(Eq(arr2.select(0), FIVE_VAL));
       await prove(Not(Eq(arr2.select(0), BitVec.val(6, 256))));
       await prove(Eq(arr2.store(idx, val).select(idx), constArr.store(idx, val).select(idx)));
-
-      // TODO: add in Quantifiers and better typing of arrays
-      // await prove(
-      //   ForAll([idx], idx.add(1).ugt(idx).and(arr.select(idx.add(1)).ugt(arr.select(idx)))).implies(
-      //     arr.select(0).ult(arr.select(1000))
-      //   )
-      // );
     });
 
     it('Finds arrays that differ but that sum to the same', async () => {
@@ -465,18 +459,16 @@ describe('high-level', () => {
       const arr1 = Array.const('arr', BitVec.sort(2), BitVec.sort(32));
       const arr2 = Array.const('arr2', BitVec.sort(2), BitVec.sort(32));
 
-      const same_sum = arr1.select(0)
+      const same_sum = arr1
+        .select(0)
         .add(arr1.select(1))
         .add(arr1.select(2))
         .add(arr1.select(3))
-        .eq(
-          arr2.select(0)
-            .add(arr2.select(1))
-            .add(arr2.select(2))
-            .add(arr2.select(3))
-        );
+        .eq(arr2.select(0).add(arr2.select(1)).add(arr2.select(2)).add(arr2.select(3)));
 
-      const different = arr1.select(0).neq(arr2.select(0))
+      const different = arr1
+        .select(0)
+        .neq(arr2.select(0))
         .or(arr1.select(1).neq(arr2.select(1)))
         .or(arr1.select(2).neq(arr2.select(2)))
         .or(arr1.select(3).neq(arr2.select(3)));
@@ -485,10 +477,74 @@ describe('high-level', () => {
 
       const arr1Vals = [0, 1, 2, 3].map(i => model.eval(arr1.select(i)).value());
       const arr2Vals = [0, 1, 2, 3].map(i => model.eval(arr2.select(i)).value());
-      expect((arr1Vals.reduce((a, b) => a + b, 0n) % mod) === arr2Vals.reduce((a, b) => a + b, 0n) % mod);
+      expect(arr1Vals.reduce((a, b) => a + b, 0n) % mod === arr2Vals.reduce((a, b) => a + b, 0n) % mod);
       for (let i = 0; i < 4; i++) {
         expect(arr1Vals[i] !== arr2Vals[i]);
       }
+    });
+
+    it('Array type inference', async () => {
+      const z3 = api.Context('main');
+
+      const Z3_ADDR = z3.BitVec.const('Vault_addr', 160);
+      const Z3_GLOBAL_STORAGE = z3.Array.const(
+        'global_storage',
+        z3.BitVec.sort(160),
+        z3.Array.sort(z3.BitVec.sort(160), z3.BitVec.sort(256)),
+      );
+      const Z3_STORAGE = Z3_GLOBAL_STORAGE.select(Z3_ADDR);
+
+      // We are so far unable to properly infer the type of Z3_STORAGE
+      // expectType<
+      //   SMTArray<'main', [BitVecSort<160>], BitVecSort<256>>
+      // >(Z3_STORAGE);
+    });
+  });
+
+  describe('quantifiers', () => {
+    it('Basic Universal', async () => {
+      const Z3 = api.Context('main');
+
+      const [x, y] = Z3.Int.consts('x y');
+
+      const conjecture = Z3.ForAll([x, y], x.neq(y).implies(x.lt(y).or(x.gt(y))));
+      await prove(conjecture);
+    });
+
+    it('Basic Existential', async () => {
+      const Z3 = api.Context('main');
+
+      const [x, y, z] = Z3.Int.consts('x y z');
+
+      const conjecture = Z3.Not(x.gt(y)).implies(
+        Z3.Exists([z], Z3.Not(z.lt(x)).and(Z3.Not(z.gt(y)))), // Can be trivially discovered with z = x or x = y
+      );
+
+      await prove(conjecture);
+    });
+
+    it('Basic Lambda', async () => {
+      const Z3 = api.Context('main');
+
+      const [x, y] = Z3.Int.consts('x y z');
+      const L = Z3.Lambda([x, y], x.add(y));
+      expect(Z3.isArraySort(L.sort)).toBeTruthy();
+      expect(Z3.isArray(L)).toBeFalsy();
+
+      const conjecture = L.select(Z3.Int.val(2), Z3.Int.val(5)).eq(Z3.Int.val(7));
+      await prove(conjecture);
+    });
+  });
+
+  describe('uninterpreted functions', () => {
+    it('Type Inference', async () => {
+      const Z3 = api.Context('main');
+
+      const f = Z3.Function.declare('f', Z3.Int.sort(), Z3.Bool.sort());
+      const input = Z3.Int.val(6);
+      const output = f.call(input);
+      expectType<Bool>(output);
+      expect(output.sort.eqIdentity(Z3.Bool.sort())).toBeTruthy();
     });
   });
 
